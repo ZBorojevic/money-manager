@@ -1,7 +1,10 @@
-import type { NextConfig } from "next";
+import type { NextConfig } from 'next'
 
 const nextConfig: NextConfig = {
-  /* config options here */
-};
+  // Ukloni webpack konfiguraciju za sada
+  experimental: {
+    esmExternals: true
+  }
+}
 
-export default nextConfig;
+export default nextConfig

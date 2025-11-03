@@ -1,0 +1,18 @@
+{
+	"folders": [
+		{
+			"path": "."
+		}
+	],
+	"settings": {
+		"tailwindCSS.includeLanguages": {
+			"plaintext": "html",
+			"javascript": "javascript",
+			"typescript": "typescript",
+			"typescriptreact": "typescriptreact",
+			"javascriptreact": "javascriptreact",
+			"css": "css",
+			"postcss": "postcss"
+		}
+	}
+}

@@ -1,0 +1,9 @@
+# Ne lintaj ništa od ovoga
+node_modules
+.next
+dist
+coverage
+lib/generated/**
+prisma/**
+**/*.wasm.js
+**/wasm-*.js

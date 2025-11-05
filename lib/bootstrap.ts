@@ -1,21 +1,16 @@
 import { prisma } from "@/lib/prisma";
 import { TxnType } from "@/lib/generated/prisma";
 
-/**
- * Idempotentno i “hard”:
- * - upsert za Account(Main)
- * - createMany za default kategorije (skipDuplicates)
- */
 export async function ensureUserBootstrap(userId: string) {
-  // Account: Main (EUR) — koristi composite unique @@unique([userId, name])
+  // 1) Osiguraj Main (EUR) – composite unique [userId, name]
   await prisma.account.upsert({
     where: { userId_name: { userId, name: "Main" } },
     update: {},
     create: { userId, name: "Main", currency: "EUR", balance: 0 },
   });
 
-  // Default kategorije
-  const existing = await prisma.category.findMany({ where: { userId } });
+  // 2) Default kategorije (idempotentno)
+  const existing = await prisma.category.findMany({ where: { userId }, select: { name: true, type: true } });
   const have = new Set(existing.map(c => `${c.type}:${c.name}`.toLowerCase()));
 
   const income = ["Salary", "Bonus", "Interest"]

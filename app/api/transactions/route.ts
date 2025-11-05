@@ -2,20 +2,47 @@ import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { getSessionUser } from "@/lib/session";
 import { parseAmountToDecimalString } from "@/lib/money";
-import { TxnType } from "@/lib/generated/prisma";
+import { TxnType, Prisma } from "@/lib/generated/prisma";
+
+type TxBody = {
+  accountId: string;
+  categoryId?: string;
+  type: "INCOME" | "EXPENSE";
+  amount: string | number;
+  currency?: string;
+  occurredAt: string; // ISO ili yyyy-mm-dd
+  note?: string;
+};
+
+function isTxBody(x: unknown): x is TxBody {
+  if (typeof x !== "object" || x === null) return false;
+  const o = x as Record<string, unknown>;
+  const typeOk = o.type === "INCOME" || o.type === "EXPENSE";
+  const amtOk = typeof o.amount === "string" || typeof o.amount === "number";
+  return (
+    typeof o.accountId === "string" &&
+    typeof o.occurredAt === "string" &&
+    typeOk &&
+    amtOk &&
+    (o.categoryId === undefined || typeof o.categoryId === "string") &&
+    (o.currency === undefined || typeof o.currency === "string") &&
+    (o.note === undefined || typeof o.note === "string")
+  );
+}
 
 export async function GET(req: Request) {
   const user = await getSessionUser();
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
   const url = new URL(req.url);
-  const limit = Number(url.searchParams.get("limit") ?? "50");
+  const limitRaw = Number(url.searchParams.get("limit") ?? "50");
+  const limit = Math.min(Math.max(Number.isFinite(limitRaw) ? limitRaw : 50, 1), 200);
 
   const data = await prisma.transaction.findMany({
     where: { userId: user.id },
     include: { category: true, account: true },
     orderBy: { occurredAt: "desc" },
-    take: Math.min(Math.max(limit, 1), 200),
+    take: limit,
   });
   return NextResponse.json(data);
 }
@@ -24,66 +51,48 @@ export async function POST(req: Request) {
   const user = await getSessionUser();
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-  const { accountId, categoryId, type, amount, currency, occurredAt, note } = await req.json();
+  let bodyUnknown: unknown;
+  try {
+    bodyUnknown = await req.json();
+  } catch {
+    return NextResponse.json({ error: "Invalid JSON" }, { status: 400 });
+  }
+  if (!isTxBody(bodyUnknown)) {
+    return NextResponse.json({ error: "Missing or invalid fields" }, { status: 400 });
+  }
 
-  if (!accountId || !type || !amount || !occurredAt)
-    return NextResponse.json({ error: "Missing fields" }, { status: 400 });
-  if (type !== "INCOME" && type !== "EXPENSE")
-    return NextResponse.json({ error: "Invalid type" }, { status: 400 });
+  const { accountId, categoryId, type, amount, currency, occurredAt, note } = bodyUnknown;
 
   const acc = await prisma.account.findUnique({ where: { id: accountId } });
-  if (!acc || acc.userId !== user.id)
+  if (!acc || acc.userId !== user.id) {
     return NextResponse.json({ error: "Invalid account" }, { status: 400 });
+  }
 
-  const decimalAmount = parseAmountToDecimalString(String(amount));
-  const currencyFinal = currency ?? acc.currency ?? "EUR";
+  try {
+    const decimalAmount = parseAmountToDecimalString(String(amount));
+    const currencyFinal = currency ?? acc.currency ?? "EUR";
 
-  const tx = await prisma.transaction.create({
-    data: {
-      userId: user.id,
-      accountId,
-      categoryId: categoryId ?? null,
-      type: type as TxnType,
-      amount: decimalAmount,
-      currency: currencyFinal,
-      occurredAt: new Date(occurredAt),
-      note: note ?? null,
-    },
-    include: { category: true, account: true },
-  });
+    const tx = await prisma.transaction.create({
+      data: {
+        userId: user.id,
+        accountId,
+        categoryId: categoryId ?? null,
+        type: type as TxnType,
+        amount: decimalAmount,
+        currency: currencyFinal,
+        occurredAt: new Date(occurredAt),
+        note: note ?? null,
+      },
+      include: { category: true, account: true },
+    });
 
-  // ---- Pace placeholder (KpiSnapshot) po mjesecu ----
-  const d = new Date(occurredAt);
-  const year = d.getUTCFullYear();
-  const month = d.getUTCMonth() + 1;
-
-  const [incomeAgg, expenseAgg] = await Promise.all([
-    prisma.transaction.aggregate({
-      where: { userId: user.id, type: TxnType.INCOME, occurredAt: {
-        gte: new Date(Date.UTC(year, month - 1, 1)), lt: new Date(Date.UTC(year, month, 1))
-      }},
-      _sum: { amount: true },
-    }),
-    prisma.transaction.aggregate({
-      where: { userId: user.id, type: TxnType.EXPENSE, occurredAt: {
-        gte: new Date(Date.UTC(year, month - 1, 1)), lt: new Date(Date.UTC(year, month, 1))
-      }},
-      _sum: { amount: true },
-    }),
-  ]);
-
-  const income = incomeAgg._sum.amount ?? 0;
-  const expenses = expenseAgg._sum.amount ?? 0;
-  const savings = Number(income) - Number(expenses);
-  const savingsRatePc = Number(income) > 0 ? (savings / Number(income)) * 100 : 0;
-  const runwayMonths = Number(expenses) > 0 ? Math.max(0, Number((savings > 0 ? savings : 0) / Number(expenses))) : 0;
-  const paceScore = Math.max(0, Math.min(100, Math.round(50 + (savingsRatePc - 20)))); // placeholder
-
-  await prisma.kpiSnapshot.upsert({
-    where: { userId_year_month: { userId: user.id, year, month } },
-    update: { income, expenses, savings, savingsRatePc, runwayMonths, paceScore },
-    create: { userId: user.id, year, month, income, expenses, savings, savingsRatePc, runwayMonths, paceScore },
-  });
-
-  return NextResponse.json(tx, { status: 201 });
+    return NextResponse.json(tx, { status: 201 });
+  } catch (e: unknown) {
+    if (e instanceof Prisma.PrismaClientKnownRequestError) {
+      console.error("Prisma error:", e.code, e.meta);
+    } else {
+      console.error("POST /api/transactions error:", e);
+    }
+    return NextResponse.json({ error: "Server error" }, { status: 500 });
+  }
 }

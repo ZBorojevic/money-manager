@@ -1,26 +1,29 @@
 import { prisma } from "@/lib/prisma";
 import { TxnType } from "@/lib/generated/prisma";
 
-// Idempotentno: kreira što nedostaje i ništa ne duplira
+/**
+ * Idempotentno i “hard”:
+ * - upsert za Account(Main)
+ * - createMany za default kategorije (skipDuplicates)
+ */
 export async function ensureUserBootstrap(userId: string) {
-  // 1) Account: Main
-  const main = await prisma.account.findFirst({ where: { userId, name: "Main" } });
-  if (!main) {
-    await prisma.account.create({
-      data: { userId, name: "Main", currency: "EUR", balance: 0 },
-    });
-  }
+  // Account: Main (EUR) — koristi composite unique @@unique([userId, name])
+  await prisma.account.upsert({
+    where: { userId_name: { userId, name: "Main" } },
+    update: {},
+    create: { userId, name: "Main", currency: "EUR", balance: 0 },
+  });
 
-  // 2) Default kategorije (po tipu)
+  // Default kategorije
   const existing = await prisma.category.findMany({ where: { userId } });
-  const haveIncome = new Set(existing.filter(c => c.type === "INCOME").map(c => c.name.toLowerCase()));
-  const haveExpense = new Set(existing.filter(c => c.type === "EXPENSE").map(c => c.name.toLowerCase()));
+  const have = new Set(existing.map(c => `${c.type}:${c.name}`.toLowerCase()));
 
-  const income = ["Salary", "Bonus", "Interest"].filter(n => !haveIncome.has(n.toLowerCase()))
+  const income = ["Salary", "Bonus", "Interest"]
+    .filter(n => !have.has(`INCOME:${n}`.toLowerCase()))
     .map(name => ({ userId, name, type: TxnType.INCOME, isDefault: true }));
 
   const expense = ["Food", "Transport", "Rent", "Utilities", "Entertainment"]
-    .filter(n => !haveExpense.has(n.toLowerCase()))
+    .filter(n => !have.has(`EXPENSE:${n}`.toLowerCase()))
     .map(name => ({ userId, name, type: TxnType.EXPENSE, isDefault: true }));
 
   if (income.length || expense.length) {

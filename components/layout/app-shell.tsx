@@ -1,55 +1,67 @@
-import { prisma } from "@/lib/prisma";
-import { getSessionUser } from "@/lib/session";
-import { formatMoney } from "@/lib/money";
-import Decimal from "decimal.js";
-import { TxnType } from "@/lib/generated/prisma";
+"use client";
 
-function startMonth() { const d = new Date(); return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), 1)); }
-function endMonth() { const d = new Date(); return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 1)); }
+import Link from "next/link";
+import Image from "next/image";
+import { usePathname } from "next/navigation";
+import clsx from "clsx";
 
-export default async function DashboardPage() {
-  const user = await getSessionUser();
-  const [income, expenses, txs] = await Promise.all([
-    prisma.transaction.aggregate({ where: { userId: user!.id, type: TxnType.INCOME, occurredAt: { gte: startMonth(), lt: endMonth() } }, _sum: { amount: true } }),
-    prisma.transaction.aggregate({ where: { userId: user!.id, type: TxnType.EXPENSE, occurredAt: { gte: startMonth(), lt: endMonth() } }, _sum: { amount: true } }),
-    prisma.transaction.findMany({ where: { userId: user!.id }, include: { account: true, category: true }, orderBy: { occurredAt: "desc" }, take: 10 }),
-  ]);
-  const inc = new Decimal(income._sum.amount ?? 0);
-  const exp = new Decimal(expenses._sum.amount ?? 0);
-  const bal = inc.minus(exp);
-
-  const TransactionForm = (await import("@/components/forms/transaction-form")).default;
+export default function AppShell({ children }: { children: React.ReactNode }) {
+  const pathname = usePathname();
+  const active = pathname.startsWith("/dashboard");
 
   return (
-    <div className="space-y-6">
-      <h1 className="text-2xl font-semibold">Dashboard</h1>
-
-      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-        <div className="card"><div className="text-sm text-neutral-600">Income</div><div className="text-2xl font-semibold">{formatMoney(inc)}</div></div>
-        <div className="card"><div className="text-sm text-neutral-600">Expenses</div><div className="text-2xl font-semibold">{formatMoney(exp)}</div></div>
-        <div className="card"><div className="text-sm text-neutral-600">Balance</div><div className="text-2xl font-semibold">{formatMoney(bal)}</div></div>
-        <div className="card"><div className="text-sm text-neutral-600">Pace score</div><div className="text-2xl font-semibold">—</div></div>
-      </div>
-
-      <div className="card"><div className="mb-3 font-medium">Quick add transaction</div><TransactionForm /></div>
-
-      <div className="card">
-        <div className="mb-3 font-medium">Recent transactions</div>
-        <div className="divide-y">
-          {txs.length === 0 && <div className="py-6 text-sm text-neutral-600">No transactions yet.</div>}
-          {txs.map(t => (
-            <div key={t.id} className="py-3 flex justify-between items-center">
-              <div>
-                <div className="font-medium">{t.category?.name ?? "—"} · {t.account.name}</div>
-                {t.note && <div className="text-sm text-neutral-600">{t.note}</div>}
-              </div>
-              <div className={t.type === "EXPENSE" ? "text-red-600" : "text-green-600"}>
-                {t.type === "EXPENSE" ? "-" : "+"}{formatMoney(t.amount)}
-              </div>
-            </div>
-          ))}
+    <div className="min-h-svh bg-neutral-50 text-neutral-900">
+      {/* Sidebar (desktop) */}
+      <aside className="hidden lg:flex flex-col w-56 border-r bg-white fixed inset-y-0">
+        <div className="p-4 flex items-center gap-2 border-b">
+          <Image src="/logo.svg" alt="Logo" width={28} height={28} />
+          <div className="font-semibold">Money Manager</div>
         </div>
-      </div>
+
+        <nav className="p-2 space-y-1 flex-1">
+          <Link
+            href="/dashboard"
+            className={clsx(
+              "flex items-center gap-2 rounded-xl px-3 py-2 text-sm transition-colors",
+              active ? "bg-black text-white" : "hover:bg-neutral-100"
+            )}
+          >
+            <span>🏠</span>
+            <span>Dashboard</span>
+          </Link>
+        </nav>
+
+        <div className="p-3 border-t">
+          {/* Ako imaš vlastitu SignOut komponentu — zamijeni ovaj Link */}
+          <Link href="/sign-out" className="text-sm underline">Sign out</Link>
+        </div>
+      </aside>
+
+      {/* Mobile topbar */}
+      <header className="lg:hidden sticky top-0 bg-white border-b z-20 flex items-center justify-between px-4 h-14">
+        <div className="flex items-center gap-2">
+          <Image src="/logo.svg" alt="Logo" width={24} height={24} />
+          <span className="font-semibold">Money Manager</span>
+        </div>
+        <Link href="/sign-out" className="text-sm underline">Sign out</Link>
+      </header>
+
+      {/* Content */}
+      <main className="lg:ml-56 p-4 lg:p-8">{children}</main>
+
+      {/* Bottom nav (mobile) */}
+      <nav className="lg:hidden fixed bottom-0 left-0 right-0 bg-white border-t z-20">
+        <Link
+          href="/dashboard"
+          className={clsx(
+            "h-12 flex flex-col items-center justify-center text-xs",
+            active ? "text-black" : "text-neutral-500"
+          )}
+        >
+          <div className="text-base">🏠</div>
+          Dashboard
+        </Link>
+      </nav>
     </div>
   );
 }

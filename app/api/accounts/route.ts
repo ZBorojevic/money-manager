@@ -17,7 +17,6 @@ export async function GET() {
 export async function POST(req: Request) {
   const user = await getSessionUser();
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-
   const { name, currency } = await req.json();
   if (!name || !currency) return NextResponse.json({ error: "Missing fields" }, { status: 400 });
 

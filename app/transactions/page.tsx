@@ -1,10 +1,13 @@
 import { prisma } from "@/lib/prisma";
 import { getSessionUser } from "@/lib/session";
+import { ensureUserBootstrap } from "@/lib/bootstrap";
 import { formatMoney } from "@/lib/money";
 
 export default async function TransactionsPage() {
   const user = await getSessionUser();
   if (!user) throw new Error("Unauthorized");
+
+  await ensureUserBootstrap(user.id);
 
   const txs = await prisma.transaction.findMany({
     where: { userId: user.id },

@@ -4,7 +4,21 @@ import { getSessionUser } from "@/lib/session";
 import { parseAmountToDecimalString } from "@/lib/money";
 import { TxnType } from "@/lib/generated/prisma";
 
-// ... GET ostaje isto ...
+export async function GET(req: Request) {
+  const user = await getSessionUser();
+  if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+
+  const url = new URL(req.url);
+  const limit = Number(url.searchParams.get("limit") ?? "50");
+
+  const data = await prisma.transaction.findMany({
+    where: { userId: user.id },
+    include: { category: true, account: true },
+    orderBy: { occurredAt: "desc" },
+    take: Math.min(Math.max(limit, 1), 200),
+  });
+  return NextResponse.json(data);
+}
 
 export async function POST(req: Request) {
   const user = await getSessionUser();
@@ -12,15 +26,14 @@ export async function POST(req: Request) {
 
   const { accountId, categoryId, type, amount, currency, occurredAt, note } = await req.json();
 
-  if (!accountId || !type || !amount || !occurredAt) {
+  if (!accountId || !type || !amount || !occurredAt)
     return NextResponse.json({ error: "Missing fields" }, { status: 400 });
-  }
-  if (type !== "INCOME" && type !== "EXPENSE") {
+  if (type !== "INCOME" && type !== "EXPENSE")
     return NextResponse.json({ error: "Invalid type" }, { status: 400 });
-  }
 
   const acc = await prisma.account.findUnique({ where: { id: accountId } });
-  if (!acc || acc.userId !== user.id) return NextResponse.json({ error: "Invalid account" }, { status: 400 });
+  if (!acc || acc.userId !== user.id)
+    return NextResponse.json({ error: "Invalid account" }, { status: 400 });
 
   const decimalAmount = parseAmountToDecimalString(String(amount));
   const currencyFinal = currency ?? acc.currency ?? "EUR";
@@ -36,22 +49,25 @@ export async function POST(req: Request) {
       occurredAt: new Date(occurredAt),
       note: note ?? null,
     },
-    include: { category: true, account: true }
+    include: { category: true, account: true },
   });
 
-  // Pace placeholder (KpiSnapshot) – isti blok kao ranije…
-
+  // ---- Pace placeholder (KpiSnapshot) po mjesecu ----
   const d = new Date(occurredAt);
   const year = d.getUTCFullYear();
   const month = d.getUTCMonth() + 1;
 
   const [incomeAgg, expenseAgg] = await Promise.all([
     prisma.transaction.aggregate({
-      where: { userId: user.id, type: TxnType.INCOME, occurredAt: { gte: new Date(Date.UTC(year, month-1, 1)), lt: new Date(Date.UTC(year, month, 1)) } },
+      where: { userId: user.id, type: TxnType.INCOME, occurredAt: {
+        gte: new Date(Date.UTC(year, month - 1, 1)), lt: new Date(Date.UTC(year, month, 1))
+      }},
       _sum: { amount: true },
     }),
     prisma.transaction.aggregate({
-      where: { userId: user.id, type: TxnType.EXPENSE, occurredAt: { gte: new Date(Date.UTC(year, month-1, 1)), lt: new Date(Date.UTC(year, month, 1)) } },
+      where: { userId: user.id, type: TxnType.EXPENSE, occurredAt: {
+        gte: new Date(Date.UTC(year, month - 1, 1)), lt: new Date(Date.UTC(year, month, 1))
+      }},
       _sum: { amount: true },
     }),
   ]);
@@ -61,7 +77,7 @@ export async function POST(req: Request) {
   const savings = Number(income) - Number(expenses);
   const savingsRatePc = Number(income) > 0 ? (savings / Number(income)) * 100 : 0;
   const runwayMonths = Number(expenses) > 0 ? Math.max(0, Number((savings > 0 ? savings : 0) / Number(expenses))) : 0;
-  const paceScore = Math.max(0, Math.min(100, Math.round(50 + (savingsRatePc - 20))));
+  const paceScore = Math.max(0, Math.min(100, Math.round(50 + (savingsRatePc - 20)))); // placeholder
 
   await prisma.kpiSnapshot.upsert({
     where: { userId_year_month: { userId: user.id, year, month } },

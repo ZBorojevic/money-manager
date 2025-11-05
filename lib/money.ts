@@ -7,11 +7,7 @@ export function parseAmountToDecimalString(input: string) {
   return value.toFixed(2);
 }
 
-export function formatMoney(
-  amount: Decimal.Value,
-  currency = "EUR",
-  locale = "en-GB"
-) {
+export function formatMoney(amount: Decimal.Value, currency = "EUR", locale = "en-GB") {
   const num = new Decimal(amount).toNumber();
   return new Intl.NumberFormat(locale, { style: "currency", currency }).format(num);
 }

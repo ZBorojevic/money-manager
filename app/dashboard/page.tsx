@@ -1,98 +1,92 @@
-// app/dashboard/page.tsx
-import { redirect } from "next/navigation";
-import { prisma } from "@/lib/db";
+import { prisma } from "@/lib/prisma";
 import { getSessionUser } from "@/lib/session";
-import TransactionForm from "@/components/transactions/transaction-form";
+import { formatMoney } from "@/lib/money";
+import Decimal from "decimal.js";
+import { TxnType } from "@/lib/generated/prisma";
+
+function startOfUTCMonth(d = new Date()) {
+  return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), 1));
+}
+function endOfUTCMonth(d = new Date()) {
+  return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 1));
+}
+
+async function getData(userId: string) {
+  const gte = startOfUTCMonth();
+  const lt  = endOfUTCMonth();
+
+  const [txs, incomeAgg, expenseAgg, kpi] = await Promise.all([
+    prisma.transaction.findMany({
+      where: { userId, occurredAt: { gte, lt } },
+      include: { category: true, account: true },
+      orderBy: { occurredAt: "desc" },
+      take: 20,
+    }),
+    prisma.transaction.aggregate({
+      where: { userId, type: TxnType.INCOME, occurredAt: { gte, lt } },
+      _sum: { amount: true },
+    }),
+    prisma.transaction.aggregate({
+      where: { userId, type: TxnType.EXPENSE, occurredAt: { gte, lt } },
+      _sum: { amount: true },
+    }),
+    prisma.kpiSnapshot.findUnique({
+      where: { userId_year_month: { userId, year: new Date().getUTCFullYear(), month: new Date().getUTCMonth()+1 } }
+    }),
+  ]);
+
+  const inc = new Decimal(incomeAgg._sum.amount ?? 0);
+  const exp = new Decimal(expenseAgg._sum.amount ?? 0);
+  const bal = inc.minus(exp);
+
+  return { txs, inc, exp, bal, kpi };
+}
 
 export default async function DashboardPage() {
   const user = await getSessionUser();
-  if (!user) redirect("/sign-in?next=%2Fdashboard");
+  if (!user) throw new Error("Unauthorized");
 
-  const [accounts, categories, recentTx, counts] = await Promise.all([
-    prisma.account.findMany({
-      where: { userId: user.id },
-      orderBy: { name: "asc" },
-      select: { id: true, name: true, currency: true },
-    }),
-    prisma.category.findMany({
-      where: { userId: user.id },
-      orderBy: [{ type: "asc" }, { name: "asc" }],
-      select: { id: true, name: true, type: true },
-    }),
-    prisma.transaction.findMany({
-      where: { userId: user.id },
-      orderBy: { occurredAt: "desc" },
-      take: 10,
-      include: { account: true, category: true },
-    }),
-    (async () => {
-      const [acc, tx] = await Promise.all([
-        prisma.account.count({ where: { userId: user.id } }),
-        prisma.transaction.count({ where: { userId: user.id } }),
-      ]);
-      return { acc, tx };
-    })(),
-  ]);
-
-  const defaultCurrency = accounts[0]?.currency ?? "EUR";
+  const { txs, inc, exp, bal, kpi } = await getData(user.id);
+  const TransactionForm = (await import("@/components/forms/transaction-form")).default;
 
   return (
     <div className="space-y-6">
       <h1 className="text-2xl font-semibold">Dashboard</h1>
 
-      {/* Stat kartice */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-        <div className="rounded-xl border p-4">
-          <div className="text-sm text-slate-500">Accounts</div>
-          <div className="text-xl font-semibold">{counts.acc}</div>
-        </div>
-        <div className="rounded-xl border p-4">
-          <div className="text-sm text-slate-500">Transactions</div>
-          <div className="text-xl font-semibold">{counts.tx}</div>
+      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+        <div className="card"><div className="text-sm text-neutral-600">Income (month)</div><div className="text-2xl font-semibold">{formatMoney(inc)}</div></div>
+        <div className="card"><div className="text-sm text-neutral-600">Expenses (month)</div><div className="text-2xl font-semibold">{formatMoney(exp)}</div></div>
+        <div className="card"><div className="text-sm text-neutral-600">Balance (month)</div><div className="text-2xl font-semibold">{formatMoney(bal)}</div></div>
+        <div className="card">
+          <div className="text-sm text-neutral-600">Pace score</div>
+          <div className="text-2xl font-semibold">{kpi?.paceScore ?? "—"}</div>
+          <div className="text-xs text-neutral-500">Placeholder (via KpiSnapshot)</div>
         </div>
       </div>
 
-      {/* Quick add */}
-      <div className="rounded-xl border p-4">
-        <h2 className="font-medium mb-3">Quick Add Transaction</h2>
-        <TransactionForm
-          accounts={accounts}
-          categories={categories}
-          defaultCurrency={defaultCurrency}
-          onCreated={undefined /* list iske refresha nakon dodavanja – F5 je ok za sada */}
-        />
+      <div className="card">
+        <div className="mb-3 font-medium">Quick add transaction</div>
+        <TransactionForm />
       </div>
 
-      {/* Recent */}
-      <div className="rounded-xl border p-4">
-        <h2 className="font-medium mb-3">Recent Transactions</h2>
-        {recentTx.length === 0 ? (
-          <p className="text-sm text-slate-500">No transactions yet.</p>
-        ) : (
-          <ul className="divide-y">
-            {recentTx.map((t) => (
-              <li key={t.id} className="py-3 flex items-center justify-between gap-3">
-                <div className="min-w-0">
-                  <div className="text-sm font-medium truncate">
-                    {t.category?.name ?? t.type}
-                  </div>
-                  <div className="text-xs text-slate-500">
-                    {new Date(t.occurredAt).toLocaleDateString()} • {t.account.name}
-                    {t.note ? ` • ${t.note}` : ""}
-                  </div>
-                </div>
-                <div
-                  className={`text-sm font-semibold ${
-                    t.type === "EXPENSE" ? "text-red-600" : "text-green-600"
-                  }`}
-                >
-                  {t.type === "EXPENSE" ? "-" : "+"}
-                  {t.amount.toString()} {t.currency}
-                </div>
-              </li>
-            ))}
-          </ul>
-        )}
+      <div className="card">
+        <div className="mb-3 font-medium">Recent (this month)</div>
+        <div className="divide-y">
+          {txs.map(t => (
+            <div key={t.id} className="py-3 flex items-center justify-between">
+              <div className="flex flex-col">
+                <span className="font-medium">
+                  {t.category?.name ?? "—"} <span className="text-neutral-500">· {t.account.name}</span>
+                </span>
+                {t.note && <span className="text-sm text-neutral-600">{t.note}</span>}
+              </div>
+              <div className={t.type === "EXPENSE" ? "text-red-600" : "text-green-700"}>
+                {t.type === "EXPENSE" ? "-" : "+"}{formatMoney(t.amount, t.currency)}
+              </div>
+            </div>
+          ))}
+          {!txs.length && <div className="py-6 text-sm text-neutral-600">No transactions yet.</div>}
+        </div>
       </div>
     </div>
   );
